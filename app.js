@@ -64,6 +64,63 @@ async function loadStravaData() {
 }
 
 // ─────────────────────────────────────────
+// GROQ AI COACH
+// ─────────────────────────────────────────
+async function fetchAICoachAdvice() {
+    const count = stravaActivities.length;
+    const totalCal = stravaActivities.reduce((s, a) => s + (a.calories || 0), 0);
+    const totalDist = stravaActivities.reduce((s, a) => s + (a.distance || 0), 0);
+    const totalTime = stravaActivities.reduce((s, a) => s + (a.moving_time || 0), 0);
+    const avgHR = stravaActivities.filter(a => a.average_heartrate).length
+        ? Math.round(stravaActivities.reduce((s, a) => s + (a.average_heartrate || 0), 0) / stravaActivities.filter(a => a.average_heartrate).length)
+        : null;
+
+    const activitiesSummary = stravaActivities.map(a =>
+        `- ${a.name} (${a.type}): ${(a.distance/1000).toFixed(1)}km, ${Math.round(a.moving_time/60)}min, ${a.calories || '?'} cal${a.average_heartrate ? `, ${Math.round(a.average_heartrate)} bpm gem` : ''}`
+    ).join('\n');
+
+    const prompt = `Je bent een persoonlijke sportcoach. Analyseer deze trainingsdata van de afgelopen week en geef kort, motiverend advies in het Nederlands.
+
+Activiteiten deze week (${count} totaal):
+${activitiesSummary || 'Geen activiteiten deze week'}
+
+Totaal: ${(totalDist/1000).toFixed(1)}km, ${Math.round(totalTime/60)} min, ${totalCal} kcal${avgHR ? `, gem hartslag ${avgHR} bpm` : ''}
+
+Geef je antwoord in dit JSON formaat (geen markdown, alleen JSON):
+{
+  "samenvatting": "Korte samenvatting van de week in 1-2 zinnen",
+  "tips": [
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"},
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"},
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"}
+  ],
+  "volgende_stap": "Wat moet de atleet nu concreet doen deze week?"
+}`;
+
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+            model: 'llama3-8b-8192',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7,
+            max_tokens: 600,
+        }),
+    });
+
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '{}';
+    try {
+        return JSON.parse(text);
+    } catch {
+        return null;
+    }
+}
+
+// ─────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────
 function greeting() {
@@ -99,25 +156,21 @@ function formatDate(dateStr) {
 }
 
 // ─────────────────────────────────────────
-// WEEK DATA UIT STRAVA
+// WEEK DATA
 // ─────────────────────────────────────────
 function getWeekData() {
     const days = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
-    const today = new Date().getDay(); // 0=zo, 1=ma
+    const today = new Date().getDay();
     const todayIdx = today === 0 ? 6 : today - 1;
-
     const weekData = days.map((d, i) => ({ day: d, cal: 0, done: false, today: i === todayIdx }));
-
     stravaActivities.forEach(a => {
         const d = new Date(a.start_date_local);
         const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
         weekData[dayIdx].cal += a.calories || 0;
         weekData[dayIdx].done = true;
     });
-
     const maxCal = Math.max(...weekData.map(d => d.cal), 1);
     weekData.forEach(d => { d.pct = Math.round((d.cal / maxCal) * 100); });
-
     return weekData;
 }
 
@@ -127,6 +180,7 @@ function getTodayStats() {
     return {
         calories: todayActs.reduce((s, a) => s + (a.calories || 0), 0),
         heartrate: todayActs.length ? Math.round(todayActs.reduce((s, a) => s + (a.average_heartrate || 0), 0) / todayActs.length) : null,
+        count: todayActs.length,
     };
 }
 
@@ -137,7 +191,6 @@ function getWeekStats() {
         time:     s.time + (a.moving_time || 0),
         count:    s.count + 1,
     }), { cal: 0, distance: 0, time: 0, count: 0 });
-
     return [
         { label: 'Totale calorieën', value: total.cal ? `${total.cal.toLocaleString('nl-BE')} kcal` : '—' },
         { label: 'Trainingen',       value: `${total.count}` },
@@ -147,12 +200,9 @@ function getWeekStats() {
 }
 
 function getNextTraining() {
-    // Simpele logica: als je vandaag al gesport hebt → rust of morgen
     const today = new Date().toDateString();
     const todayActs = stravaActivities.filter(a => new Date(a.start_date_local).toDateString() === today);
-    if (todayActs.length === 0) {
-        return { name: 'Geen training gepland', time: '—', distance: '—', emoji: '😴' };
-    }
+    if (todayActs.length === 0) return { name: 'Geen training vandaag', time: '—', distance: '—', emoji: '😴' };
     return { name: 'Duurloop', time: '07:00', distance: '8 km', emoji: '🏃' };
 }
 
@@ -204,7 +254,6 @@ function renderHome() {
       <div class="day">${todayName()}</div>
       <h1>${greeting()}, <span>Atleet</span></h1>
     </div>
-
     <div class="ring-section">
       <div class="ring-wrap">
         <svg width="200" height="200" viewBox="0 0 200 200">
@@ -227,7 +276,6 @@ function renderHome() {
       </div>
       <div class="ring-subtitle">Nog <b>${remaining} kcal</b> te gaan vandaag</div>
     </div>
-
     <div class="stats-grid">
       <div class="stat-card">
         <div class="icon">❤️</div>
@@ -237,12 +285,11 @@ function renderHome() {
       </div>
       <div class="stat-card">
         <div class="icon">🏃</div>
-        <div class="value">${stravaActivities.filter(a => new Date(a.start_date_local).toDateString() === new Date().toDateString()).length}</div>
+        <div class="value">${today.count}</div>
         <div class="label">Trainingen vandaag</div>
         <div class="sub">deze week: ${stravaActivities.length}</div>
       </div>
     </div>
-
     <div class="next-training">
       <div class="training-icon">${next.emoji}</div>
       <div class="training-info">
@@ -267,7 +314,6 @@ function renderActiviteiten() {
       </div>
     `;
     }
-
     const items = stravaActivities.map(a => `
     <div class="activity-item">
       <div class="activity-dot">${activityEmoji(a.type)}</div>
@@ -282,7 +328,6 @@ function renderActiviteiten() {
       </div>
     </div>
   `).join('');
-
     return `
     <div class="page-title"><span>Activiteiten</span></div>
     ${items}
@@ -295,7 +340,6 @@ function renderActiviteiten() {
 function renderWeek() {
     const weekData = getWeekData();
     const weekStats = getWeekStats();
-
     const bars = weekData.map(d => `
     <div class="week-day ${d.done ? 'done' : ''} ${d.today ? 'today' : ''}">
       <div class="day-label">${d.day}</div>
@@ -305,14 +349,12 @@ function renderWeek() {
       <div class="day-dot"></div>
     </div>
   `).join('');
-
     const rows = weekStats.map(s => `
     <div class="week-stat-row">
       <span class="wlabel">${s.label}</span>
       <span class="wval">${s.value}</span>
     </div>
   `).join('');
-
     return `
     <div class="page-title"><span>Week</span> overzicht</div>
     <div class="week-grid">${bars}</div>
@@ -327,39 +369,6 @@ function renderWeek() {
 // COACH
 // ─────────────────────────────────────────
 function renderCoach() {
-    const count = stravaActivities.length;
-    const totalCal = stravaActivities.reduce((s, a) => s + (a.calories || 0), 0);
-    const avgHR = stravaActivities.filter(a => a.average_heartrate).length
-        ? Math.round(stravaActivities.reduce((s, a) => s + (a.average_heartrate || 0), 0) / stravaActivities.filter(a => a.average_heartrate).length)
-        : null;
-
-    const tips = [];
-
-    if (count === 0) {
-        tips.push({ icon: '💡', label: 'Tip', text: 'Je hebt deze week nog niet gesport. Tijd om in actie te komen! Zelfs een korte wandeling telt mee.' });
-    } else if (count >= 5) {
-        tips.push({ icon: '🎉', label: 'Geweldig', text: `Je hebt al ${count} trainingen gedaan deze week. Zorg voor voldoende herstel!` });
-    } else {
-        tips.push({ icon: '💡', label: 'Tip van de dag', text: `Je hebt deze week al ${count} training${count > 1 ? 'en' : ''} gedaan. Goed bezig! Probeer nog ${5 - count} extra sessie${5 - count > 1 ? 's' : ''} te doen.` });
-    }
-
-    if (avgHR && avgHR > 160) {
-        tips.push({ icon: '⚡', label: 'Aandachtspunt', text: `Je gemiddelde hartslag deze week was ${avgHR} bpm. Dat is vrij hoog. Overweeg een rustigere duurtraining.` });
-    } else if (avgHR) {
-        tips.push({ icon: '❤️', label: 'Hartslag', text: `Je gemiddelde hartslag deze week was ${avgHR} bpm. Dat ziet er goed uit!` });
-    }
-
-    if (totalCal > 0) {
-        tips.push({ icon: '🔥', label: 'Calorieën', text: `Je hebt deze week al ${totalCal.toLocaleString('nl-BE')} calorieën verbrand. ${totalCal > 2000 ? 'Uitstekend werk!' : 'Blijf zo doorgaan!'}` });
-    }
-
-    const tipsHtml = tips.map(t => `
-    <div class="coach-tip">
-      <div class="tip-label">${t.icon} ${t.label}</div>
-      <p>${t.text}</p>
-    </div>
-  `).join('');
-
     return `
     <div class="page-title"><span>Coach</span></div>
     <div class="coach-header">
@@ -367,7 +376,46 @@ function renderCoach() {
       <h2>Jouw AI Coach</h2>
       <p>Gebaseerd op jouw Strava data deze week</p>
     </div>
+    <div id="coach-content">
+      <div class="empty-state">
+        <div class="emoji">⏳</div>
+        <p>Coach is aan het analyseren...</p>
+      </div>
+    </div>
+    <button class="coach-btn" onclick="refreshCoach()">🔄 Nieuw advies</button>
+  `;
+}
+
+async function refreshCoach() {
+    const el = document.getElementById('coach-content');
+    if (!el) return;
+    el.innerHTML = `
+    <div class="empty-state">
+      <div class="emoji">⏳</div>
+      <p>Coach is aan het analyseren...</p>
+    </div>
+  `;
+    const advice = await fetchAICoachAdvice();
+    if (!advice) {
+        el.innerHTML = `<div class="empty-state"><div class="emoji">😕</div><p>Kon geen advies ophalen.<br>Probeer opnieuw.</p></div>`;
+        return;
+    }
+    const tipsHtml = (advice.tips || []).map(t => `
+    <div class="coach-tip">
+      <div class="tip-label">${t.icon} ${t.titel}</div>
+      <p>${t.tekst}</p>
+    </div>
+  `).join('');
+    el.innerHTML = `
+    <div class="coach-tip" style="border-left-color: var(--red)">
+      <div class="tip-label">📊 Samenvatting</div>
+      <p>${advice.samenvatting}</p>
+    </div>
     ${tipsHtml}
+    <div class="coach-tip" style="border-left-color: #00c853">
+      <div class="tip-label">🎯 Volgende stap</div>
+      <p>${advice.volgende_stap}</p>
+    </div>
   `;
 }
 
@@ -377,7 +425,6 @@ function renderCoach() {
 function renderStatistieken() {
     const recent = stravaActivities.slice(0, 4);
     const maxCal = Math.max(...recent.map(a => a.calories || 0), 1);
-
     const bars = recent.map(a => `
     <div class="mini-bar-row">
       <div class="mini-bar-label">${activityEmoji(a.type)}</div>
@@ -387,11 +434,9 @@ function renderStatistieken() {
       <div class="mini-bar-val">${a.calories || '—'}</div>
     </div>
   `).join('');
-
     const totalDist = stravaStats?.all_run_totals?.distance
         ? formatDistance(stravaStats.all_run_totals.distance)
         : '—';
-
     return `
     <div class="page-title"><span>Statistieken</span></div>
     <div class="stat-big-card">
@@ -414,6 +459,7 @@ function showTab(id, el) {
     el.classList.add('active');
     document.getElementById('page-' + id).classList.add('active');
     if (id === 'home') animateRing();
+    if (id === 'coach') refreshCoach();
 }
 
 // ─────────────────────────────────────────
@@ -431,10 +477,11 @@ function animateRing() {
 // ─────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────
-function init() {
+async function init() {
     renderTabs();
     renderPages();
-    loadStravaData();
+    await loadStravaData();
+    refreshCoach();
 }
 
 init();
