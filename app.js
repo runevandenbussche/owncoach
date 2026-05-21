@@ -10,6 +10,27 @@ const TABS = [
 ];
 
 // ─────────────────────────────────────────
+// PADEL SESSIES (lokaal opgeslagen)
+// ─────────────────────────────────────────
+function getPadelSessies() {
+    try {
+        return JSON.parse(localStorage.getItem('padel_sessies') || '[]');
+    } catch { return []; }
+}
+
+function savePadelSessie(datum, duurMinuten) {
+    const sessies = getPadelSessies();
+    const kcal = Math.round((CONFIG.PROFIEL.padel_kcal_per_uur / 60) * duurMinuten);
+    sessies.push({ datum, duurMinuten, kcal });
+    localStorage.setItem('padel_sessies', JSON.stringify(sessies));
+}
+
+function getPadelDezeWeek() {
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return getPadelSessies().filter(s => new Date(s.datum).getTime() > weekAgo);
+}
+
+// ─────────────────────────────────────────
 // STRAVA API
 // ─────────────────────────────────────────
 let accessToken = null;
@@ -31,7 +52,6 @@ async function getAccessToken() {
     const data = await res.json();
     accessToken = data.access_token;
     athleteId   = data.athlete?.id;
-    return accessToken;
 }
 
 async function fetchActivities() {
@@ -58,7 +78,7 @@ async function loadStravaData() {
         await Promise.all([fetchActivities(), fetchAthleteStats()]);
         renderPages();
         animateRing();
-    } catch (e) {
+    } catch(e) {
         console.error('Strava fout:', e);
     }
 }
@@ -67,34 +87,56 @@ async function loadStravaData() {
 // GROQ AI COACH
 // ─────────────────────────────────────────
 async function fetchAICoachAdvice() {
-    const count = stravaActivities.length;
-    const totalCal = stravaActivities.reduce((s, a) => s + (a.calories || 0), 0);
-    const totalDist = stravaActivities.reduce((s, a) => s + (a.distance || 0), 0);
-    const totalTime = stravaActivities.reduce((s, a) => s + (a.moving_time || 0), 0);
-    const avgHR = stravaActivities.filter(a => a.average_heartrate).length
-        ? Math.round(stravaActivities.reduce((s, a) => s + (a.average_heartrate || 0), 0) / stravaActivities.filter(a => a.average_heartrate).length)
-        : null;
+    const p = CONFIG.PROFIEL;
+    const padelDezeWeek = getPadelDezeWeek();
+    const padelCount = padelDezeWeek.length;
+    const padelKcal = padelDezeWeek.reduce((s, x) => s + x.kcal, 0);
 
-    const activitiesSummary = stravaActivities.map(a =>
-        `- ${a.name} (${a.type}): ${(a.distance/1000).toFixed(1)}km, ${Math.round(a.moving_time/60)}min, ${a.calories || '?'} cal${a.average_heartrate ? `, ${Math.round(a.average_heartrate)} bpm gem` : ''}`
-    ).join('\n');
+    const stravaCount = stravaActivities.length;
+    const totalKm = stravaActivities.reduce((s, a) => s + (a.distance || 0), 0) / 1000;
+    const totalKcal = stravaActivities.reduce((s, a) => s + (a.calories || 0), 0) + padelKcal;
+    const totalTrainingen = stravaCount + padelCount;
+    const resterendeTrainingen = Math.max(p.doel_trainingen_per_week - totalTrainingen, 0);
+    const resterendeKm = Math.max(p.doel_km_per_week_lopen - totalKm, 0);
 
-    const prompt = `Je bent een persoonlijke sportcoach. Analyseer deze trainingsdata van de afgelopen week en geef kort, motiverend advies in het Nederlands.
+    const activiteitenTekst = stravaActivities.map(a =>
+        `- ${a.name} (${a.type}): ${(a.distance/1000).toFixed(1)}km, ${Math.round(a.moving_time/60)}min${a.average_heartrate ? `, ${Math.round(a.average_heartrate)} bpm` : ''}`
+    ).join('\n') || 'Geen Strava activiteiten';
 
-Activiteiten deze week (${count} totaal):
-${activitiesSummary || 'Geen activiteiten deze week'}
+    const padelTekst = padelDezeWeek.map(s =>
+        `- Padel: ${s.duurMinuten} min, ${s.kcal} kcal (${s.datum})`
+    ).join('\n') || 'Geen padel sessies';
 
-Totaal: ${(totalDist/1000).toFixed(1)}km, ${Math.round(totalTime/60)} min, ${totalCal} kcal${avgHR ? `, gem hartslag ${avgHR} bpm` : ''}
+    const prompt = `Je bent de persoonlijke sportcoach van ${p.naam}. Geef motiverend, concreet advies in het Nederlands op basis van zijn data.
 
-Geef je antwoord in dit JSON formaat (geen markdown, alleen JSON):
+PROFIEL:
+- Doel: ${p.doel}
+- Niveau: ${p.niveau}
+- Doelstelling: ${p.doel_trainingen_per_week}x sporten per week, ${p.doel_km_per_week_lopen} km lopen per week
+- Favoriete sporten: ${p.favoriete_sporten.join(', ')}
+
+DEZE WEEK:
+Strava activiteiten:
+${activiteitenTekst}
+
+Padel sessies:
+${padelTekst}
+
+SAMENVATTING:
+- Totaal trainingen: ${totalTrainingen}/${p.doel_trainingen_per_week}
+- Totaal km gelopen: ${totalKm.toFixed(1)}/${p.doel_km_per_week_lopen} km
+- Totaal kcal verbrand: ${totalKcal}
+- Nog te doen: ${resterendeTrainingen} training(en), ${resterendeKm.toFixed(1)} km
+
+Geef je antwoord ALLEEN in dit JSON formaat, geen markdown:
 {
-  "samenvatting": "Korte samenvatting van de week in 1-2 zinnen",
+  "samenvatting": "Persoonlijke samenvatting in 1-2 zinnen, gebruik de naam ${p.naam}",
   "tips": [
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"},
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"},
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Advies in 1-2 zinnen"}
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"},
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"},
+    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"}
   ],
-  "volgende_stap": "Wat moet de atleet nu concreet doen deze week?"
+  "volgende_stap": "Wat moet ${p.naam} nu concreet doen? Wees specifiek (bv. 'Ga morgen 8km lopen aan rustig tempo')"
 }`;
 
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -107,7 +149,7 @@ Geef je antwoord in dit JSON formaat (geen markdown, alleen JSON):
             model: 'llama3-8b-8192',
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
-            max_tokens: 600,
+            max_tokens: 700,
         }),
     });
 
@@ -115,9 +157,7 @@ Geef je antwoord in dit JSON formaat (geen markdown, alleen JSON):
     const text = data.choices?.[0]?.message?.content || '{}';
     try {
         return JSON.parse(text);
-    } catch {
-        return null;
-    }
+    } catch { return null; }
 }
 
 // ─────────────────────────────────────────
@@ -162,13 +202,23 @@ function getWeekData() {
     const days = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
     const today = new Date().getDay();
     const todayIdx = today === 0 ? 6 : today - 1;
-    const weekData = days.map((d, i) => ({ day: d, cal: 0, done: false, today: i === todayIdx }));
+    const weekData = days.map((d, i) => ({ day: d, cal: 0, done: false, today: i === todayIdx, padel: false }));
+
     stravaActivities.forEach(a => {
         const d = new Date(a.start_date_local);
         const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
         weekData[dayIdx].cal += a.calories || 0;
         weekData[dayIdx].done = true;
     });
+
+    getPadelDezeWeek().forEach(s => {
+        const d = new Date(s.datum);
+        const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
+        weekData[dayIdx].cal += s.kcal;
+        weekData[dayIdx].done = true;
+        weekData[dayIdx].padel = true;
+    });
+
     const maxCal = Math.max(...weekData.map(d => d.cal), 1);
     weekData.forEach(d => { d.pct = Math.round((d.cal / maxCal) * 100); });
     return weekData;
@@ -177,33 +227,33 @@ function getWeekData() {
 function getTodayStats() {
     const today = new Date().toDateString();
     const todayActs = stravaActivities.filter(a => new Date(a.start_date_local).toDateString() === today);
+    const todayPadel = getPadelDezeWeek().filter(s => new Date(s.datum).toDateString() === today);
     return {
-        calories: todayActs.reduce((s, a) => s + (a.calories || 0), 0),
+        calories: todayActs.reduce((s, a) => s + (a.calories || 0), 0) + todayPadel.reduce((s, x) => s + x.kcal, 0),
         heartrate: todayActs.length ? Math.round(todayActs.reduce((s, a) => s + (a.average_heartrate || 0), 0) / todayActs.length) : null,
-        count: todayActs.length,
+        count: todayActs.length + todayPadel.length,
     };
 }
 
 function getWeekStats() {
+    const padelDezeWeek = getPadelDezeWeek();
+    const totalKcalPadel = padelDezeWeek.reduce((s, x) => s + x.kcal, 0);
     const total = stravaActivities.reduce((s, a) => ({
         cal:      s.cal + (a.calories || 0),
         distance: s.distance + (a.distance || 0),
         time:     s.time + (a.moving_time || 0),
         count:    s.count + 1,
     }), { cal: 0, distance: 0, time: 0, count: 0 });
-    return [
-        { label: 'Totale calorieën', value: total.cal ? `${total.cal.toLocaleString('nl-BE')} kcal` : '—' },
-        { label: 'Trainingen',       value: `${total.count}` },
-        { label: 'Actieve tijd',     value: total.time ? formatDuration(total.time) : '—' },
-        { label: 'Afstand',          value: total.distance ? formatDistance(total.distance) : '—' },
-    ];
-}
 
-function getNextTraining() {
-    const today = new Date().toDateString();
-    const todayActs = stravaActivities.filter(a => new Date(a.start_date_local).toDateString() === today);
-    if (todayActs.length === 0) return { name: 'Geen training vandaag', time: '—', distance: '—', emoji: '😴' };
-    return { name: 'Duurloop', time: '07:00', distance: '8 km', emoji: '🏃' };
+    const totalTrainingen = total.count + padelDezeWeek.length;
+    const p = CONFIG.PROFIEL;
+
+    return [
+        { label: 'Trainingen',       value: `${totalTrainingen} / ${p.doel_trainingen_per_week}` },
+        { label: 'Km gelopen',       value: `${(total.distance/1000).toFixed(1)} / ${p.doel_km_per_week_lopen} km` },
+        { label: 'Totale calorieën', value: `${(total.cal + totalKcalPadel).toLocaleString('nl-BE')} kcal` },
+        { label: 'Padel sessies',    value: `${padelDezeWeek.length}x` },
+    ];
 }
 
 // ─────────────────────────────────────────
@@ -247,12 +297,12 @@ function renderHome() {
     const caloriesGoal = 700;
     const burned = today.calories || 0;
     const remaining = Math.max(caloriesGoal - burned, 0);
-    const next = getNextTraining();
+    const p = CONFIG.PROFIEL;
 
     return `
     <div class="greeting">
       <div class="day">${todayName()}</div>
-      <h1>${greeting()}, <span>Atleet</span></h1>
+      <h1>${greeting()}, <span>${p.naam}</span></h1>
     </div>
     <div class="ring-section">
       <div class="ring-wrap">
@@ -287,34 +337,83 @@ function renderHome() {
         <div class="icon">🏃</div>
         <div class="value">${today.count}</div>
         <div class="label">Trainingen vandaag</div>
-        <div class="sub">deze week: ${stravaActivities.length}</div>
+        <div class="sub">deze week: ${stravaActivities.length + getPadelDezeWeek().length}</div>
       </div>
     </div>
-    <div class="next-training">
-      <div class="training-icon">${next.emoji}</div>
-      <div class="training-info">
-        <div class="label">Volgende training</div>
-        <div class="name">${next.name}</div>
-        <div class="meta">${next.time !== '—' ? `Morgen om <span>${next.time}</span> · ${next.distance}` : 'Rust dag vandaag'}</div>
+    <div class="padel-card">
+      <div class="padel-info">
+        <div class="padel-icon">🎾</div>
+        <div>
+          <div class="padel-title">Padel gespeeld?</div>
+          <div class="padel-sub">+${Math.round(CONFIG.PROFIEL.padel_kcal_per_uur * CONFIG.PROFIEL.padel_duur_minuten / 60)} kcal voor ${CONFIG.PROFIEL.padel_duur_minuten} min</div>
+        </div>
+      </div>
+      <button class="padel-btn" onclick="logPadel()">+ Log</button>
+    </div>
+  `;
+}
+
+function logPadel() {
+    // Toon een mooi formulier als overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.85); z-index:999;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  `;
+
+    const vandaag = new Date().toISOString().split('T')[0];
+
+    overlay.innerHTML = `
+    <div style="background:#1e1e1e; border-radius:20px; padding:24px; width:100%; max-width:340px; border:1px solid #2a2a2a;">
+      <h2 style="font-family:'Bebas Neue',sans-serif; font-size:26px; margin-bottom:6px; letter-spacing:1px;">🎾 Padel loggen</h2>
+      <p style="color:#666; font-size:13px; margin-bottom:20px;">Voeg een padel sessie toe</p>
+
+      <label style="font-size:13px; color:#888; text-transform:uppercase; letter-spacing:1px;">Datum</label>
+      <input type="date" id="padel-datum" value="${vandaag}" max="${vandaag}"
+        style="width:100%; background:#0d0d0d; border:1px solid #2a2a2a; border-radius:10px;
+               color:white; padding:12px; font-size:15px; margin:8px 0 16px; box-sizing:border-box;">
+
+      <label style="font-size:13px; color:#888; text-transform:uppercase; letter-spacing:1px;">Duur (minuten)</label>
+      <input type="number" id="padel-duur" value="${CONFIG.PROFIEL.padel_duur_minuten}" min="15" max="240"
+        style="width:100%; background:#0d0d0d; border:1px solid #2a2a2a; border-radius:10px;
+               color:white; padding:12px; font-size:15px; margin:8px 0 24px; box-sizing:border-box;">
+
+      <div style="display:flex; gap:10px;">
+        <button onclick="this.closest('div').parentElement.parentElement.remove()"
+          style="flex:1; padding:14px; background:#2a2a2a; color:#888; border:none;
+                 border-radius:12px; font-size:15px; font-weight:600; cursor:pointer; font-family:'DM Sans',sans-serif;">
+          Annuleer
+        </button>
+        <button id="padel-save-btn"
+          style="flex:1; padding:14px; background:linear-gradient(135deg,#ff6a00,#e8001d);
+                 color:white; border:none; border-radius:12px; font-size:15px;
+                 font-weight:600; cursor:pointer; font-family:'DM Sans',sans-serif;">
+          Opslaan ✓
+        </button>
       </div>
     </div>
   `;
+
+    document.body.appendChild(overlay);
+
+    document.getElementById('padel-save-btn').addEventListener('click', () => {
+        const datum = document.getElementById('padel-datum').value;
+        const minuten = parseInt(document.getElementById('padel-duur').value) || CONFIG.PROFIEL.padel_duur_minuten;
+        savePadelSessie(datum, minuten);
+        overlay.remove();
+        renderPages();
+        animateRing();
+    });
 }
 
 // ─────────────────────────────────────────
 // ACTIVITEITEN
 // ─────────────────────────────────────────
 function renderActiviteiten() {
-    if (!stravaActivities.length) {
-        return `
-      <div class="page-title"><span>Activiteiten</span></div>
-      <div class="empty-state">
-        <div class="emoji">📂</div>
-        <p>Geen activiteiten gevonden<br>deze week.</p>
-      </div>
-    `;
-    }
-    const items = stravaActivities.map(a => `
+    const padelDezeWeek = getPadelDezeWeek();
+
+    const stravaItems = stravaActivities.map(a => `
     <div class="activity-item">
       <div class="activity-dot">${activityEmoji(a.type)}</div>
       <div class="activity-info">
@@ -328,9 +427,35 @@ function renderActiviteiten() {
       </div>
     </div>
   `).join('');
+
+    const padelItems = padelDezeWeek.map(s => `
+    <div class="activity-item">
+      <div class="activity-dot">🎾</div>
+      <div class="activity-info">
+        <div class="name">Padel</div>
+        <div class="date">${s.datum} · ${s.duurMinuten} min</div>
+      </div>
+      <div class="activity-stats">
+        <div class="cal">${s.kcal} cal</div>
+        <div class="dist">manueel</div>
+      </div>
+    </div>
+  `).join('');
+
+    if (!stravaActivities.length && !padelDezeWeek.length) {
+        return `
+      <div class="page-title"><span>Activiteiten</span></div>
+      <div class="empty-state">
+        <div class="emoji">📂</div>
+        <p>Geen activiteiten gevonden<br>deze week.</p>
+      </div>
+    `;
+    }
+
     return `
     <div class="page-title"><span>Activiteiten</span></div>
-    ${items}
+    ${stravaItems}
+    ${padelItems}
   `;
 }
 
@@ -340,21 +465,24 @@ function renderActiviteiten() {
 function renderWeek() {
     const weekData = getWeekData();
     const weekStats = getWeekStats();
+
     const bars = weekData.map(d => `
     <div class="week-day ${d.done ? 'done' : ''} ${d.today ? 'today' : ''}">
       <div class="day-label">${d.day}</div>
       <div class="day-bar-wrap">
         <div class="day-bar" style="height:${d.pct}%"></div>
       </div>
-      <div class="day-dot"></div>
+      <div class="day-dot">${d.padel ? '🎾' : ''}</div>
     </div>
   `).join('');
+
     const rows = weekStats.map(s => `
     <div class="week-stat-row">
       <span class="wlabel">${s.label}</span>
       <span class="wval">${s.value}</span>
     </div>
   `).join('');
+
     return `
     <div class="page-title"><span>Week</span> overzicht</div>
     <div class="week-grid">${bars}</div>
@@ -374,7 +502,7 @@ function renderCoach() {
     <div class="coach-header">
       <div class="coach-avatar">🤖</div>
       <h2>Jouw AI Coach</h2>
-      <p>Gebaseerd op jouw Strava data deze week</p>
+      <p>Persoonlijk advies voor ${CONFIG.PROFIEL.naam}</p>
     </div>
     <div id="coach-content">
       <div class="empty-state">
@@ -407,12 +535,12 @@ async function refreshCoach() {
     </div>
   `).join('');
     el.innerHTML = `
-    <div class="coach-tip" style="border-left-color: var(--red)">
+    <div class="coach-tip" style="border-left-color:var(--red)">
       <div class="tip-label">📊 Samenvatting</div>
       <p>${advice.samenvatting}</p>
     </div>
     ${tipsHtml}
-    <div class="coach-tip" style="border-left-color: #00c853">
+    <div class="coach-tip" style="border-left-color:#00c853">
       <div class="tip-label">🎯 Volgende stap</div>
       <p>${advice.volgende_stap}</p>
     </div>
@@ -435,8 +563,7 @@ function renderStatistieken() {
     </div>
   `).join('');
     const totalDist = stravaStats?.all_run_totals?.distance
-        ? formatDistance(stravaStats.all_run_totals.distance)
-        : '—';
+        ? formatDistance(stravaStats.all_run_totals.distance) : '—';
     return `
     <div class="page-title"><span>Statistieken</span></div>
     <div class="stat-big-card">
