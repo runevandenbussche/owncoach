@@ -1,4 +1,26 @@
 // ─────────────────────────────────────────
+// CONFIG FALLBACK (als config.js niet geladen is)
+// ─────────────────────────────────────────
+if (typeof CONFIG === 'undefined') {
+    window.CONFIG = {
+        STRAVA_CLIENT_ID: '249009',
+        STRAVA_CLIENT_SECRET: '0d66a873186009a98220f36068f5940d5e414a09',
+        STRAVA_REFRESH_TOKEN: 'f242db2c0984c407363578a52d2ba97e8ebf04ac',
+        GROQ_API_KEY: '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',
+        PROFIEL: {
+            naam: 'Rune',
+            doel_trainingen_per_week: 4,
+            doel_km_per_week_lopen: 25,
+            favoriete_sporten: ['lopen', 'padel'],
+            niveau: 'gemiddeld',
+            doel: 'conditie verbeteren',
+            padel_duur_minuten: 90,
+            padel_kcal_per_uur: 450,
+        }
+    };
+}
+
+// ─────────────────────────────────────────
 // TABS CONFIG
 // ─────────────────────────────────────────
 const TABS = [
