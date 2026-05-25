@@ -22,12 +22,20 @@ if (typeof CONFIG === 'undefined') {
 // ─────────────────────────────────────────
 // TABS CONFIG
 // ─────────────────────────────────────────
-const TABS = [
-    { id: 'home',         label: 'Home' },
-    { id: 'activiteiten', label: 'Activiteiten' },
-    { id: 'week',         label: 'Week' },
-    { id: 'statistieken', label: 'Statistieken' },
+const SPORT_TABS = [
+    { id: 'sport-home',      label: 'Home' },
+    { id: 'activiteiten',    label: 'Activiteiten' },
+    { id: 'week',            label: 'Week' },
+    { id: 'statistieken',    label: 'Statistieken' },
 ];
+
+const DAGELIJKS_TABS = [
+    { id: 'dagelijks-home',  label: 'Home' },
+    { id: 'mail',            label: 'Mail' },
+    { id: 'agenda',          label: 'Agenda' },
+];
+
+let huidigeSectie = null; // null = hoofdscherm, 'sport' of 'dagelijks'
 
 // ─────────────────────────────────────────
 // PADEL SESSIES (lokaal opgeslagen)
@@ -49,8 +57,8 @@ function deletePadelSessie(index) {
     const sessies = getPadelSessies();
     sessies.splice(index, 1);
     localStorage.setItem('padel_sessies', JSON.stringify(sessies));
-    const activeTab = document.querySelector('.tab.active')?.getAttribute('onclick')?.match(/'(\w+)'/)?.[1] || 'home';
-    renderPages();
+    const activeTab = document.querySelector('.tab.active')?.getAttribute('onclick')?.match(/'(\w+)'/)?.[1] || 'activiteiten';
+    if (huidigeSectie) renderPages(huidigeSectie);
     const tabEl = [...document.querySelectorAll('.tab')].find(t => t.getAttribute('onclick')?.includes(`'${activeTab}'`));
     if (tabEl) showTab(activeTab, tabEl);
 }
@@ -136,7 +144,7 @@ async function loadStravaData() {
     try {
         await getAccessToken();
         await Promise.all([fetchActivities(), fetchAthleteStats()]);
-        renderPages();
+        if (huidigeSectie) renderPages(huidigeSectie);
         animateRing();
     } catch(e) {
         console.error('Strava fout:', e);
@@ -252,20 +260,62 @@ function getWeekStats() {
 // ─────────────────────────────────────────
 // RENDER TABS
 // ─────────────────────────────────────────
-function renderTabs() {
-    document.getElementById('topnav').innerHTML = TABS.map(t => `
-    <div class="tab ${t.id === 'home' ? 'active' : ''}" onclick="showTab('${t.id}', this)">
-      ${t.label}
-    </div>
-  `).join('');
+function renderTabs(sectie) {
+    const tabs = sectie === 'sport' ? SPORT_TABS : DAGELIJKS_TABS;
+    const firstId = tabs[0].id;
+    document.getElementById('topnav').innerHTML = `
+    <button class="back-btn" onclick="goHome()">← Home</button>
+    ${tabs.map(t => `
+      <div class="tab ${t.id === firstId ? 'active' : ''}" onclick="showTab('${t.id}', this)">
+        ${t.label}
+      </div>`).join('')}
+  `;
 }
 
 // ─────────────────────────────────────────
 // RENDER PAGES
 // ─────────────────────────────────────────
-function renderPages() {
-    document.getElementById('app').innerHTML = TABS.map(t => `
-    <div class="page ${t.id === 'home' ? 'active' : ''}" id="page-${t.id}">
+function renderHoofdscherm() {
+    huidigeSectie = null;
+    document.getElementById('topnav').innerHTML = '';
+    document.getElementById('app').innerHTML = `
+    <div class="hoofdscherm">
+      <div class="greeting">
+        <div class="day">${todayName()}</div>
+        <h1>${greeting()}, <span>${CONFIG.PROFIEL.naam}</span></h1>
+      </div>
+      <div class="sectie-grid">
+        <button class="sectie-btn" onclick="openSectie('sport')">
+          <div class="sectie-icon">🏃</div>
+          <div class="sectie-label">Sporten</div>
+          <div class="sectie-sub">Activiteiten, week & stats</div>
+        </button>
+        <button class="sectie-btn" onclick="openSectie('dagelijks')">
+          <div class="sectie-icon">📅</div>
+          <div class="sectie-label">Dagelijks leven</div>
+          <div class="sectie-sub">Mail & agenda</div>
+        </button>
+      </div>
+    </div>
+    <div class="bottom-safe"></div>
+  `;
+}
+
+function openSectie(sectie) {
+    huidigeSectie = sectie;
+    renderTabs(sectie);
+    renderPages(sectie);
+    if (sectie === 'sport') animateRing();
+}
+
+function goHome() {
+    renderHoofdscherm();
+}
+
+function renderPages(sectie) {
+    const tabs = sectie === 'sport' ? SPORT_TABS : DAGELIJKS_TABS;
+    document.getElementById('app').innerHTML = tabs.map((t, idx) => `
+    <div class="page ${idx === 0 ? 'active' : ''}" id="page-${t.id}">
       ${renderPage(t.id)}
       <div class="bottom-safe"></div>
     </div>
@@ -274,10 +324,14 @@ function renderPages() {
 
 function renderPage(id) {
     switch(id) {
-        case 'home':         return renderHome();
-        case 'activiteiten': return renderActiviteiten();
-        case 'week':         return renderWeek();
-        case 'statistieken': return renderStatistieken();
+        case 'sport-home':    return renderHome();
+        case 'activiteiten':  return renderActiviteiten();
+        case 'week':          return renderWeek();
+        case 'statistieken':  return renderStatistieken();
+        case 'dagelijks-home': return renderDagelijksHome();
+        case 'mail':          return renderMail();
+        case 'agenda':        return renderAgenda();
+        default: return '';
     }
 }
 
@@ -394,7 +448,7 @@ function logPadel() {
         const minuten = parseInt(document.getElementById('padel-duur').value) || CONFIG.PROFIEL.padel_duur_minuten;
         savePadelSessie(datum, minuten);
         overlay.remove();
-        renderPages();
+        if (huidigeSectie) renderPages(huidigeSectie);
         animateRing();
     });
 }
@@ -567,6 +621,57 @@ function renderStatistieken() {
   `;
 }
 
+
+// ─────────────────────────────────────────
+// DAGELIJKS LEVEN
+// ─────────────────────────────────────────
+function renderDagelijksHome() {
+    return `
+    <div class="greeting">
+      <div class="day">${todayName()}</div>
+      <h1>Dagelijks <span>Leven</span></h1>
+    </div>
+    <div class="dagelijks-cards">
+      <div class="dagelijks-card" onclick="showTab('mail', document.querySelector('.tab[onclick*=mail]'))">
+        <div class="dagelijks-card-icon">📬</div>
+        <div>
+          <div class="dagelijks-card-title">Mail recap</div>
+          <div class="dagelijks-card-sub">Overzicht van je recente mails</div>
+        </div>
+        <div class="dagelijks-card-arrow">›</div>
+      </div>
+      <div class="dagelijks-card" onclick="showTab('agenda', document.querySelector('.tab[onclick*=agenda]'))">
+        <div class="dagelijks-card-icon">📅</div>
+        <div>
+          <div class="dagelijks-card-title">Agenda</div>
+          <div class="dagelijks-card-sub">Je afspraken van vandaag</div>
+        </div>
+        <div class="dagelijks-card-arrow">›</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMail() {
+    return `
+    <div class="page-title"><span>Mail</span> Recap</div>
+    <div class="empty-state">
+      <div class="emoji">📬</div>
+      <p>Binnenkort beschikbaar.<br>Gmail integratie komt eraan.</p>
+    </div>
+  `;
+}
+
+function renderAgenda() {
+    return `
+    <div class="page-title"><span>Agenda</span></div>
+    <div class="empty-state">
+      <div class="emoji">📅</div>
+      <p>Binnenkort beschikbaar.<br>Kalender integratie komt eraan.</p>
+    </div>
+  `;
+}
+
 // ─────────────────────────────────────────
 // TAB SWITCHING
 // ─────────────────────────────────────────
@@ -575,7 +680,7 @@ function showTab(id, el) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
     document.getElementById('page-' + id).classList.add('active');
-    if (id === 'home') animateRing();
+    if (id === 'sport-home') animateRing();
 }
 
 // ─────────────────────────────────────────
@@ -594,8 +699,7 @@ function animateRing() {
 // INIT
 // ─────────────────────────────────────────
 async function init() {
-    renderTabs();
-    renderPages();
+    renderHoofdscherm();
     await loadStravaData();
 }
 
