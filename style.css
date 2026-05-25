@@ -227,6 +227,8 @@ body {
 .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 24px; }
 .week-day { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .week-day .day-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.week-day .day-date { font-size: 11px; color: var(--muted); font-weight: 600; }
+.week-day.today .day-date { color: var(--orange); }
 .week-day .day-bar-wrap {
     width: 100%; height: 80px;
     background: var(--card);

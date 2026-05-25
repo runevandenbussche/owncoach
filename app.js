@@ -6,7 +6,6 @@ if (typeof CONFIG === 'undefined') {
         STRAVA_CLIENT_ID: '249009',
         STRAVA_CLIENT_SECRET: '0d66a873186009a98220f36068f5940d5e414a09',
         STRAVA_REFRESH_TOKEN: 'f242db2c0984c407363578a52d2ba97e8ebf04ac',
-        GROQ_API_KEY: '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',
         PROFIEL: {
             naam: 'Rune',
             doel_trainingen_per_week: 4,
@@ -27,7 +26,6 @@ const TABS = [
     { id: 'home',         label: 'Home' },
     { id: 'activiteiten', label: 'Activiteiten' },
     { id: 'week',         label: 'Week' },
-    { id: 'coach',        label: 'Coach' },
     { id: 'statistieken', label: 'Statistieken' },
 ];
 
@@ -47,9 +45,29 @@ function savePadelSessie(datum, duurMinuten) {
     localStorage.setItem('padel_sessies', JSON.stringify(sessies));
 }
 
+function deletePadelSessie(index) {
+    const sessies = getPadelSessies();
+    sessies.splice(index, 1);
+    localStorage.setItem('padel_sessies', JSON.stringify(sessies));
+    const activeTab = document.querySelector('.tab.active')?.getAttribute('onclick')?.match(/'(\w+)'/)?.[1] || 'home';
+    renderPages();
+    const tabEl = [...document.querySelectorAll('.tab')].find(t => t.getAttribute('onclick')?.includes(`'${activeTab}'`));
+    if (tabEl) showTab(activeTab, tabEl);
+}
+
+function getWeekStart() {
+    const now = new Date();
+    const day = now.getDay();
+    const diffToMonday = (day === 0 ? -6 : 1 - day);
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diffToMonday);
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+}
+
 function getPadelDezeWeek() {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    return getPadelSessies().filter(s => new Date(s.datum).getTime() > weekAgo);
+    const weekStart = getWeekStart();
+    return getPadelSessies().filter(s => new Date(s.datum) >= weekStart);
 }
 
 // ─────────────────────────────────────────
@@ -105,82 +123,6 @@ async function loadStravaData() {
     }
 }
 
-// ─────────────────────────────────────────
-// GROQ AI COACH
-// ─────────────────────────────────────────
-async function fetchAICoachAdvice() {
-    const p = CONFIG.PROFIEL;
-    const padelDezeWeek = getPadelDezeWeek();
-    const padelCount = padelDezeWeek.length;
-    const padelKcal = padelDezeWeek.reduce((s, x) => s + x.kcal, 0);
-
-    const stravaCount = stravaActivities.length;
-    const totalKm = stravaActivities.reduce((s, a) => s + (a.distance || 0), 0) / 1000;
-    const totalKcal = stravaActivities.reduce((s, a) => s + (a.calories || 0), 0) + padelKcal;
-    const totalTrainingen = stravaCount + padelCount;
-    const resterendeTrainingen = Math.max(p.doel_trainingen_per_week - totalTrainingen, 0);
-    const resterendeKm = Math.max(p.doel_km_per_week_lopen - totalKm, 0);
-
-    const activiteitenTekst = stravaActivities.map(a =>
-        `- ${a.name} (${a.type}): ${(a.distance/1000).toFixed(1)}km, ${Math.round(a.moving_time/60)}min${a.average_heartrate ? `, ${Math.round(a.average_heartrate)} bpm` : ''}`
-    ).join('\n') || 'Geen Strava activiteiten';
-
-    const padelTekst = padelDezeWeek.map(s =>
-        `- Padel: ${s.duurMinuten} min, ${s.kcal} kcal (${s.datum})`
-    ).join('\n') || 'Geen padel sessies';
-
-    const prompt = `Je bent de persoonlijke sportcoach van ${p.naam}. Geef motiverend, concreet advies in het Nederlands op basis van zijn data.
-
-PROFIEL:
-- Doel: ${p.doel}
-- Niveau: ${p.niveau}
-- Doelstelling: ${p.doel_trainingen_per_week}x sporten per week, ${p.doel_km_per_week_lopen} km lopen per week
-- Favoriete sporten: ${p.favoriete_sporten.join(', ')}
-
-DEZE WEEK:
-Strava activiteiten:
-${activiteitenTekst}
-
-Padel sessies:
-${padelTekst}
-
-SAMENVATTING:
-- Totaal trainingen: ${totalTrainingen}/${p.doel_trainingen_per_week}
-- Totaal km gelopen: ${totalKm.toFixed(1)}/${p.doel_km_per_week_lopen} km
-- Totaal kcal verbrand: ${totalKcal}
-- Nog te doen: ${resterendeTrainingen} training(en), ${resterendeKm.toFixed(1)} km
-
-Geef je antwoord ALLEEN in dit JSON formaat, geen markdown:
-{
-  "samenvatting": "Persoonlijke samenvatting in 1-2 zinnen, gebruik de naam ${p.naam}",
-  "tips": [
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"},
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"},
-    {"icon": "emoji", "titel": "Korte titel", "tekst": "Concreet advies in 1-2 zinnen"}
-  ],
-  "volgende_stap": "Wat moet ${p.naam} nu concreet doen? Wees specifiek (bv. 'Ga morgen 8km lopen aan rustig tempo')"
-}`;
-
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-            model: 'llama3-8b-8192',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.7,
-            max_tokens: 700,
-        }),
-    });
-
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '{}';
-    try {
-        return JSON.parse(text);
-    } catch { return null; }
-}
 
 // ─────────────────────────────────────────
 // HELPERS
@@ -224,7 +166,12 @@ function getWeekData() {
     const days = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
     const today = new Date().getDay();
     const todayIdx = today === 0 ? 6 : today - 1;
-    const weekData = days.map((d, i) => ({ day: d, cal: 0, done: false, today: i === todayIdx, padel: false }));
+    const weekStart = getWeekStart();
+    const weekData = days.map((d, i) => {
+        const date = new Date(weekStart);
+        date.setDate(weekStart.getDate() + i);
+        return { day: d, date: date.getDate(), cal: 0, done: false, today: i === todayIdx, padel: false };
+    });
 
     stravaActivities.forEach(a => {
         const d = new Date(a.start_date_local);
@@ -306,7 +253,6 @@ function renderPage(id) {
         case 'home':         return renderHome();
         case 'activiteiten': return renderActiviteiten();
         case 'week':         return renderWeek();
-        case 'coach':        return renderCoach();
         case 'statistieken': return renderStatistieken();
     }
 }
@@ -433,7 +379,8 @@ function logPadel() {
 // ACTIVITEITEN
 // ─────────────────────────────────────────
 function renderActiviteiten() {
-    const padelDezeWeek = getPadelDezeWeek();
+    const allSessies = getPadelSessies();
+    const weekAgo = getWeekStart();
 
     const stravaItems = stravaActivities.map(a => `
     <div class="activity-item">
@@ -450,7 +397,10 @@ function renderActiviteiten() {
     </div>
   `).join('');
 
-    const padelItems = padelDezeWeek.map(s => `
+    const padelItems = allSessies
+        .map((s, i) => ({ ...s, _i: i }))
+        .filter(s => new Date(s.datum).getTime() > weekAgo)
+        .map(s => `
     <div class="activity-item">
       <div class="activity-dot">🎾</div>
       <div class="activity-info">
@@ -461,10 +411,11 @@ function renderActiviteiten() {
         <div class="cal">${s.kcal} cal</div>
         <div class="dist">manueel</div>
       </div>
+      <button class="delete-padel-btn" onclick="deletePadelSessie(${s._i})" title="Verwijder">🗑</button>
     </div>
   `).join('');
 
-    if (!stravaActivities.length && !padelDezeWeek.length) {
+    if (!stravaActivities.length && !padelItems) {
         return `
       <div class="page-title"><span>Activiteiten</span></div>
       <div class="empty-state">
@@ -491,6 +442,7 @@ function renderWeek() {
     const bars = weekData.map(d => `
     <div class="week-day ${d.done ? 'done' : ''} ${d.today ? 'today' : ''}">
       <div class="day-label">${d.day}</div>
+      <div class="day-date">${d.date}</div>
       <div class="day-bar-wrap">
         <div class="day-bar" style="height:${d.pct}%"></div>
       </div>
@@ -515,59 +467,7 @@ function renderWeek() {
   `;
 }
 
-// ─────────────────────────────────────────
-// COACH
-// ─────────────────────────────────────────
-function renderCoach() {
-    return `
-    <div class="page-title"><span>Coach</span></div>
-    <div class="coach-header">
-      <div class="coach-avatar">🤖</div>
-      <h2>Jouw AI Coach</h2>
-      <p>Persoonlijk advies voor ${CONFIG.PROFIEL.naam}</p>
-    </div>
-    <div id="coach-content">
-      <div class="empty-state">
-        <div class="emoji">⏳</div>
-        <p>Coach is aan het analyseren...</p>
-      </div>
-    </div>
-    <button class="coach-btn" onclick="refreshCoach()">🔄 Nieuw advies</button>
-  `;
-}
 
-async function refreshCoach() {
-    const el = document.getElementById('coach-content');
-    if (!el) return;
-    el.innerHTML = `
-    <div class="empty-state">
-      <div class="emoji">⏳</div>
-      <p>Coach is aan het analyseren...</p>
-    </div>
-  `;
-    const advice = await fetchAICoachAdvice();
-    if (!advice) {
-        el.innerHTML = `<div class="empty-state"><div class="emoji">😕</div><p>Kon geen advies ophalen.<br>Probeer opnieuw.</p></div>`;
-        return;
-    }
-    const tipsHtml = (advice.tips || []).map(t => `
-    <div class="coach-tip">
-      <div class="tip-label">${t.icon} ${t.titel}</div>
-      <p>${t.tekst}</p>
-    </div>
-  `).join('');
-    el.innerHTML = `
-    <div class="coach-tip" style="border-left-color:var(--red)">
-      <div class="tip-label">📊 Samenvatting</div>
-      <p>${advice.samenvatting}</p>
-    </div>
-    ${tipsHtml}
-    <div class="coach-tip" style="border-left-color:#00c853">
-      <div class="tip-label">🎯 Volgende stap</div>
-      <p>${advice.volgende_stap}</p>
-    </div>
-  `;
-}
 
 // ─────────────────────────────────────────
 // STATISTIEKEN
@@ -608,7 +508,6 @@ function showTab(id, el) {
     el.classList.add('active');
     document.getElementById('page-' + id).classList.add('active');
     if (id === 'home') animateRing();
-    if (id === 'coach') refreshCoach();
 }
 
 // ─────────────────────────────────────────
@@ -630,7 +529,6 @@ async function init() {
     renderTabs();
     renderPages();
     await loadStravaData();
-    refreshCoach();
 }
 
 init();
