@@ -100,7 +100,20 @@ async function fetchActivities() {
         `https://www.strava.com/api/v3/athlete/activities?after=${weekAgo}&per_page=20`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    stravaActivities = await res.json();
+    const list = await res.json();
+
+    // Haal detail op per activiteit om calorieën te krijgen
+    stravaActivities = await Promise.all(list.map(async a => {
+        try {
+            const detail = await fetch(
+                `https://www.strava.com/api/v3/activities/${a.id}`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            return await detail.json();
+        } catch {
+            return a; // fallback naar lijst-data
+        }
+    }));
 }
 
 async function fetchAthleteStats() {
@@ -173,8 +186,12 @@ function getWeekData() {
         return { day: d, date: date.getDate(), cal: 0, done: false, today: i === todayIdx, padel: false };
     });
 
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 7);
+
     stravaActivities.forEach(a => {
         const d = new Date(a.start_date_local);
+        if (d < weekStart || d >= weekEnd) return; // alleen huidige kalenderweek
         const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
         weekData[dayIdx].cal += a.calories || 0;
         weekData[dayIdx].done = true;
