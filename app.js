@@ -117,6 +117,13 @@ async function fetchActivities() {
 }
 
 async function fetchAthleteStats() {
+    // Haal eerst athlete op als id ontbreekt
+    if (!athleteId) {
+        const athleteRes = await fetch('https://www.strava.com/api/v3/athlete',
+            { headers: { Authorization: `Bearer ${accessToken}` } });
+        const athlete = await athleteRes.json();
+        athleteId = athlete.id;
+    }
     if (!athleteId) return;
     const res = await fetch(
         `https://www.strava.com/api/v3/athletes/${athleteId}/stats`,
@@ -395,57 +402,101 @@ function logPadel() {
 // ─────────────────────────────────────────
 // ACTIVITEITEN
 // ─────────────────────────────────────────
+function activityItemHtml(emoji, name, dateStr, durationStr, heartrate, cal, dist, deleteBtn) {
+    return `
+    <div class="activity-item">
+      <div class="activity-dot">${emoji}</div>
+      <div class="activity-info">
+        <div class="name">${name}</div>
+        <div class="date">${dateStr}${durationStr ? ' · ' + durationStr : ''}</div>
+        ${heartrate ? `<div class="date">❤️ ${heartrate} bpm gem.</div>` : ''}
+      </div>
+      <div class="activity-stats">
+        <div class="cal">${cal}</div>
+        <div class="dist">${dist}</div>
+      </div>
+      ${deleteBtn || ''}
+    </div>`;
+}
+
+function buildActiviteitItems(stravaList, padelList) {
+    const items = [];
+
+    stravaList.forEach(a => {
+        items.push({
+            ts: new Date(a.start_date_local).getTime(),
+            html: activityItemHtml(
+                activityEmoji(a.type),
+                a.name,
+                formatDate(a.start_date_local),
+                formatDuration(a.moving_time),
+                a.average_heartrate ? Math.round(a.average_heartrate) : null,
+                a.calories ? a.calories + ' cal' : '—',
+                formatDistance(a.distance),
+                ''
+            )
+        });
+    });
+
+    padelList.forEach(s => {
+        items.push({
+            ts: new Date(s.datum).getTime(),
+            html: activityItemHtml(
+                '🎾', 'Padel', s.datum, s.duurMinuten + ' min', null,
+                s.kcal + ' cal', 'manueel',
+                `<button class="delete-padel-btn" onclick="deletePadelSessie(${s._i})" title="Verwijder">🗑</button>`
+            )
+        });
+    });
+
+    return items.sort((a, b) => b.ts - a.ts);
+}
+
+let oudeActiviteitenZichtbaar = false;
+
+function toggleOudeActiviteiten() {
+    oudeActiviteitenZichtbaar = !oudeActiviteitenZichtbaar;
+    const el = document.getElementById('oude-activiteiten');
+    const btn = document.getElementById('oude-btn');
+    if (!el || !btn) return;
+    el.style.display = oudeActiviteitenZichtbaar ? 'block' : 'none';
+    btn.textContent = oudeActiviteitenZichtbaar ? '▲ Verbergen' : '📦 Langer dan een week geleden';
+}
+
 function renderActiviteiten() {
-    const allSessies = getPadelSessies();
-    const weekAgo = getWeekStart();
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const allSessies = getPadelSessies().map((s, i) => ({ ...s, _i: i }));
 
-    const stravaItems = stravaActivities.map(a => `
-    <div class="activity-item">
-      <div class="activity-dot">${activityEmoji(a.type)}</div>
-      <div class="activity-info">
-        <div class="name">${a.name}</div>
-        <div class="date">${formatDate(a.start_date_local)} · ${formatDuration(a.moving_time)}</div>
-        ${a.average_heartrate ? `<div class="date">❤️ ${Math.round(a.average_heartrate)} bpm gem.</div>` : ''}
-      </div>
-      <div class="activity-stats">
-        <div class="cal">${a.calories ? a.calories + ' cal' : '—'}</div>
-        <div class="dist">${formatDistance(a.distance)}</div>
-      </div>
-    </div>
-  `).join('');
+    const recenteStrava = stravaActivities.filter(a => new Date(a.start_date_local).getTime() >= sevenDaysAgo);
+    const oudeStrava    = stravaActivities.filter(a => new Date(a.start_date_local).getTime() < sevenDaysAgo);
 
-    const padelItems = allSessies
-        .map((s, i) => ({ ...s, _i: i }))
-        .filter(s => new Date(s.datum).getTime() > weekAgo)
-        .map(s => `
-    <div class="activity-item">
-      <div class="activity-dot">🎾</div>
-      <div class="activity-info">
-        <div class="name">Padel</div>
-        <div class="date">${s.datum} · ${s.duurMinuten} min</div>
-      </div>
-      <div class="activity-stats">
-        <div class="cal">${s.kcal} cal</div>
-        <div class="dist">manueel</div>
-      </div>
-      <button class="delete-padel-btn" onclick="deletePadelSessie(${s._i})" title="Verwijder">🗑</button>
-    </div>
-  `).join('');
+    const recentePadel = allSessies.filter(s => new Date(s.datum).getTime() >= sevenDaysAgo);
+    const oudePadel    = allSessies.filter(s => new Date(s.datum).getTime() < sevenDaysAgo);
 
-    if (!stravaActivities.length && !padelItems) {
+    const recenteItems = buildActiviteitItems(recenteStrava, recentePadel);
+    const oudeItems    = buildActiviteitItems(oudeStrava, oudePadel);
+
+    if (!recenteItems.length && !oudeItems.length) {
         return `
       <div class="page-title"><span>Activiteiten</span></div>
       <div class="empty-state">
         <div class="emoji">📂</div>
-        <p>Geen activiteiten gevonden<br>deze week.</p>
-      </div>
-    `;
+        <p>Geen activiteiten gevonden.</p>
+      </div>`;
     }
+
+    const oudeHtml = oudeItems.length ? `
+    <button id="oude-btn" class="oude-activiteiten-btn" onclick="toggleOudeActiviteiten()">
+      📦 Langer dan een week geleden
+    </button>
+    <div id="oude-activiteiten" style="display:none">
+      ${oudeItems.map(i => i.html).join('')}
+    </div>` : '';
 
     return `
     <div class="page-title"><span>Activiteiten</span></div>
-    ${stravaItems}
-    ${padelItems}
+    ${recenteItems.length ? recenteItems.map(i => i.html).join('') : '<p style="color:var(--muted);font-size:14px;margin-bottom:16px;">Geen activiteiten de afgelopen 7 dagen.</p>'}
+    ${oudeHtml}
   `;
 }
 

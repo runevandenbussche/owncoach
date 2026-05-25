@@ -347,3 +347,23 @@ body {
     font-family: 'DM Sans', sans-serif;
     flex-shrink: 0;
 }
+/* OUDE ACTIVITEITEN KNOP */
+.oude-activiteiten-btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--card);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 12px;
+    font-family: 'DM Sans', sans-serif;
+    text-align: left;
+    transition: border-color 0.2s, color 0.2s;
+}
+.oude-activiteiten-btn:hover {
+    border-color: var(--orange);
+    color: var(--orange);
+}
